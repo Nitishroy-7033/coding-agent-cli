@@ -1,0 +1,28 @@
+Metadata-Version: 2.4
+Name: coding-agent-cli
+Version: 0.1.0
+Summary: A CLI coding agent powered by custom OpenAI-compatible API endpoints
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: openai>=1.0.0
+Requires-Dist: typer>=0.9.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: prompt-toolkit>=3.0.0
+Requires-Dist: pydantic>=2.0.0
+
+# CLI Coding Agent
+
+An agentic CLI coding tool powered by custom OpenAI-compatible endpoints.
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+## Quick Start
+
+```bash
+# Run CLI REPL
+agent
+```

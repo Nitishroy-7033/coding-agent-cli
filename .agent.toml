@@ -1,0 +1,3 @@
+base_url = "http://127.0.0.1:31415/v1"
+api_key = "freellmapi-163648e4918b01d38ba7693bf750629f29a13a9431db96a2"
+model = "auto"
