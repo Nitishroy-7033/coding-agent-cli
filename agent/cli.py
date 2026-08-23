@@ -4,25 +4,56 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
-from rich.syntax import Syntax
-from rich.text import Text
 from rich.table import Table
+from rich.live import Live
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
 
 from agent.config import load_config
 from agent.client import get_client
-from agent.tools.registry import TOOLS, TOOL_REGISTRY
+from agent.tools.registry import TOOLS, TOOL_REGISTRY, get_tools_for_mode
 from agent.loop import run_turn
+from agent.tui import run_tui
+from agent.modes import get_system_prompt, AgentMode
 
-app = typer.Typer(name="agent", help="CLI Coding Agent")
+app = typer.Typer(name="agent", help="CLI Coding Agent (OpenCode Edition)", invoke_without_command=True)
 console = Console()
 
 
-def render_header(config):
+@app.callback(invoke_without_command=True)
+def default_entry(ctx: typer.Context):
+    """Default entrypoint: Launches OpenCode TUI interface if no sub-command passed."""
+    if ctx.invoked_subcommand is None:
+        run_tui()
+
+
+@app.command()
+def tui(yolo: bool = typer.Option(False, "--yolo", help="Run without safety prompts. Risky!")):
+    """Launch OpenCode TUI interface."""
+    from agent.config import save_config
+    if yolo:
+        save_config(yolo=True)
+    run_tui()
+
+
+@app.command()
+def chat(
+    cli_mode: bool = typer.Option(False, "--cli", help="Run classic terminal prompt mode instead of OpenCode TUI"),
+    yolo: bool = typer.Option(False, "--yolo", help="Run without safety prompts. Risky!"),
+):
+    """Start interactive chat REPL with the coding agent."""
+    from agent.config import save_config
+    if yolo:
+        save_config(yolo=True)
+        
+    if not cli_mode:
+        run_tui()
+        return
+
+    config = load_config()
+    client = get_client(config)
     cwd = Path.cwd()
-    folder_name = cwd.name
 
     table = Table.grid(expand=True)
     table.add_column(justify="left")
@@ -30,7 +61,7 @@ def render_header(config):
 
     table.add_row(
         f"[bold cyan]🤖 CLI Coding Agent[/bold cyan] [dim](v0.1.0)[/dim]",
-        f"[dim]Workspace:[/dim] [bold yellow]{folder_name}[/bold yellow]",
+        f"[dim]Workspace:[/dim] [bold yellow]{cwd.name}[/bold yellow]",
     )
     table.add_row(
         f"[dim]Endpoint:[/dim] [green]{config.base_url}[/green] | [dim]Model:[/dim] [magenta]{config.model}[/magenta]",
@@ -46,109 +77,116 @@ def render_header(config):
         )
     )
 
-
-@app.command()
-def chat():
-    """Start interactive chat REPL with the coding agent."""
-    config = load_config()
-    client = get_client(config)
-    cwd = Path.cwd()
-
-    render_header(config)
-
-    system_prompt = (
-        f"You are an expert CLI Coding Agent operating in the local workspace: {cwd}.\n"
-        "Your primary role is to inspect code, analyze files, debug issues, and assist with software development.\n\n"
-        "Guidelines:\n"
-        "1. When asked about project files, code structure, or specific paths, PROACTIVELY call tools like `read_file` to read actual files from the workspace instead of guessing.\n"
-        "2. Keep your answers concise, clear, and structured in Markdown with code blocks.\n"
-        "3. If a file is missing or a tool fails, explain the exact error and suggest logical next steps."
-    )
-
+    current_mode = AgentMode.BUILD
+    
     messages: list[dict] = [
         {
             "role": "system",
-            "content": system_prompt,
+            "content": get_system_prompt(current_mode, cwd),
         }
     ]
 
     session = PromptSession(history=InMemoryHistory())
 
+    status_indicator = None
+
     def on_tool_start(fn_name: str, args: dict):
-        args_formatted = "\n".join([f"  [dim]•[/dim] [cyan]{k}:[/cyan] [yellow]{v}[/yellow]" for k, v in args.items()])
-        console.print(
-            Panel(
-                f"[bold yellow]Tool:[/bold yellow] [bold white]{fn_name}[/bold white]\n[bold yellow]Parameters:[/bold yellow]\n{args_formatted}",
-                title="[bold yellow]⚡ Executing Tool[/bold yellow]",
-                border_style="yellow",
-                expand=False,
-            )
-        )
+        nonlocal status_indicator
+        target = args.get("command") or args.get("path") or args.get("pattern") or ""
+        desc = f"Running {fn_name} {target}..."
+        status_indicator = console.status(f"[bold cyan]{desc}[/bold cyan]", spinner="dots")
+        status_indicator.start()
 
-    def on_tool_end(fn_name: str, result: str):
-        is_error = result.startswith("Error:")
-        border_style = "red" if is_error else "dim green"
-        title = f"[bold red]❌ Tool Error ({fn_name})[/bold red]" if is_error else f"[bold green]✓ Tool Result ({fn_name})[/bold green]"
-
-        if len(result) > 500:
-            display_text = result[:500] + f"\n... [Truncated {len(result) - 500} bytes]"
-        else:
-            display_text = result
-
-        console.print(
-            Panel(
-                display_text.strip(),
-                title=title,
-                border_style=border_style,
-                expand=False,
-            )
-        )
+    def on_tool_end(fn_name: str, args: dict, result: str):
+        nonlocal status_indicator
+        if status_indicator:
+            status_indicator.stop()
+            status_indicator = None
+        preview = result[:200] + "..." if len(result) > 200 else result
+        console.print(f"[dim green]✓ Result ({fn_name}):[/dim green] [dim]{preview}[/dim]")
 
     while True:
         try:
-            folder_name = cwd.name
-            prompt_html = HTML(
-                f"<cyan>🤖 agent</cyan> <ansigray>[{folder_name}]</ansigray> <bold>❯</bold> "
-            )
+            prompt_html = HTML(f"<cyan>🤖 agent</cyan> <ansigray>[{cwd.name}]</ansigray> <bold>❯</bold> ")
             user_input = session.prompt(prompt_html).strip()
 
             if not user_input:
                 continue
 
             if user_input.lower() in ("/exit", "/quit", "exit", "quit"):
-                console.print("\n[dim cyan]Session ended. Goodbye![/dim cyan]")
+                console.print("\n[dim cyan]Goodbye![/dim cyan]")
                 break
 
             if user_input.lower() == "/clear":
                 messages = [messages[0]]
                 console.print("[dim green]✓ History cleared.[/dim green]\n")
                 continue
+                
+            if user_input.lower() == "/help":
+                console.print("[bold]Available Commands:[/bold]")
+                console.print("  [cyan]/clear[/cyan]  - Reset conversation history")
+                console.print("  [cyan]/exit[/cyan]   - Quit the REPL")
+                console.print("  [cyan]/model <name>[/cyan] - Switch the active model")
+                console.print("  [cyan]/mode <target>[/cyan] - Change agent mode (BUILD, PLAN, ASK)")
+                console.print("  [cyan]/undo[/cyan]   - Undo the last agent action")
+                continue
+                
+            if user_input.lower() == "/undo":
+                console.print("[dim yellow]Undo functionality is coming in Week 7![/dim yellow]")
+                continue
+                
+            if user_input.lower().startswith("/model"):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) > 1:
+                    new_model = parts[1].strip()
+                    from agent.config import save_config
+                    config = save_config(model=new_model)
+                    console.print(f"[dim green]✓ Model switched to {new_model}[/dim green]")
+                else:
+                    console.print(f"Current model is [bold]{config.model}[/bold]")
+                continue
+                
+            if user_input.lower().startswith("/mode"):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) > 1:
+                    target_mode = parts[1].strip().upper()
+                    try:
+                        current_mode = AgentMode(target_mode)
+                        messages[0] = {"role": "system", "content": get_system_prompt(current_mode, cwd)}
+                        console.print(f"[dim green]✓ Mode switched to {target_mode}[/dim green]")
+                    except ValueError:
+                        console.print(f"[bold red]Invalid mode. Available: BUILD, PLAN, ASK[/bold red]")
+                continue
 
             messages.append({"role": "user", "content": user_input})
 
-            with console.status("[bold cyan]🤖 Agent thinking...[/bold cyan]", spinner="dots"):
+            accumulated_text = ""
+            live = Live(Markdown(""), console=console, refresh_per_second=10)
+            
+            def on_stream_chunk(chunk: str):
+                nonlocal accumulated_text
+                if not live.is_started:
+                    live.start()
+                accumulated_text += chunk
+                live.update(Markdown(accumulated_text))
+
+            try:
                 run_turn(
                     messages=messages,
-                    tools=TOOLS,
+                    tools=get_tools_for_mode(current_mode),
                     tool_registry=TOOL_REGISTRY,
                     client=client,
                     model=config.model,
                     on_tool_start=on_tool_start,
                     on_tool_end=on_tool_end,
+                    on_stream_chunk=on_stream_chunk,
                 )
-
-            # Print latest assistant message
-            last_msg = messages[-1]
-            if last_msg.get("role") == "assistant" and last_msg.get("content"):
-                console.print()
-                console.print(
-                    Panel(
-                        Markdown(last_msg["content"]),
-                        title="[bold cyan]🤖 Agent Response[/bold cyan]",
-                        border_style="bright_blue",
-                    )
-                )
-                console.print()
+            finally:
+                if live.is_started:
+                    live.stop()
+                elif accumulated_text:
+                    # In case it generated text but never triggered the live start, or we want a final render
+                    console.print(Panel(Markdown(accumulated_text), border_style="bright_blue"))
 
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim cyan]Session terminated.[/dim cyan]")
@@ -159,6 +197,58 @@ def chat():
 
 def main():
     app()
+
+
+@app.command()
+def run(
+    task: str, 
+    print_mode: bool = typer.Option(False, "--print", help="Output only the final text, suitable for piping."),
+    yolo: bool = typer.Option(False, "--yolo", help="Run without safety prompts. Risky!"),
+):
+    """Run a single task non-interactively."""
+    from agent.config import save_config
+    if yolo:
+        save_config(yolo=True)
+        
+    config = load_config()
+    client = get_client(config)
+    cwd = Path.cwd()
+    
+    from agent.modes import get_system_prompt, AgentMode
+    messages = [
+        {"role": "system", "content": get_system_prompt(AgentMode.BUILD, cwd)},
+        {"role": "user", "content": task}
+    ]
+    
+    if not print_mode:
+        console.print(f"[bold cyan]Running Task:[/bold cyan] {task}")
+        
+    def on_tool_start(fn_name: str, args: dict):
+        if not print_mode:
+            target = args.get("command") or args.get("path") or args.get("pattern") or ""
+            console.print(f"[dim yellow]⚡ Tool:[/dim yellow] [bold]{fn_name}[/bold] {target}")
+            
+    def on_tool_end(fn_name: str, args: dict, result: str):
+        if not print_mode:
+            preview = result[:200] + "..." if len(result) > 200 else result
+            console.print(f"[dim green]✓ Result ({fn_name}):[/dim green] [dim]{preview}[/dim]")
+            
+    run_turn(
+        messages=messages,
+        tools=TOOLS,
+        tool_registry=TOOL_REGISTRY,
+        client=client,
+        model=config.model,
+        on_tool_start=on_tool_start,
+        on_tool_end=on_tool_end,
+    )
+    
+    last_msg = messages[-1]
+    if last_msg.get("role") == "assistant" and last_msg.get("content"):
+        if print_mode:
+            print(last_msg["content"])
+        else:
+            console.print(Panel(Markdown(last_msg["content"]), border_style="bright_blue"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,3 @@
+*.pyc
+coding_agent_cli.egg-info/
+agent/__pycache__/
