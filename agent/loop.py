@@ -13,15 +13,21 @@ def run_turn(
     on_tool_start: Optional[Callable[[str, dict], None]] = None,
     on_tool_end: Optional[Callable[[str, dict, str], None]] = None,
     on_stream_chunk: Optional[Callable[[str], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
+    on_tool_approval: Optional[Callable[[str, dict], bool]] = None,
 ) -> list[dict[str, Any]]:
     """Execute one turn of conversation loop until plain text reply from model."""
     while True:
+        if is_cancelled and is_cancelled():
+            break
+            
         msg_dict = call_model(
             client=client, 
             model=model, 
             messages=messages, 
             tools=tools,
-            on_stream_chunk=on_stream_chunk
+            on_stream_chunk=on_stream_chunk,
+            is_cancelled=is_cancelled
         )
 
         messages.append(msg_dict)
@@ -55,8 +61,15 @@ def run_turn(
                     result = f"Error: Tool '{fn_name}' is not registered."
                 else:
                     try:
-                        target_fn = tool_registry[fn_name]
-                        result = target_fn(**args)
+                        approved = True
+                        if fn_name in ("run_bash", "write_file", "edit_file", "delete_file") and on_tool_approval:
+                            approved = on_tool_approval(fn_name, args)
+                            
+                        if not approved:
+                            result = "Error: User denied permission to execute this tool."
+                        else:
+                            target_fn = tool_registry[fn_name]
+                            result = target_fn(**args)
                     except Exception as e:
                         result = f"Error executing tool '{fn_name}': {str(e)}"
 

@@ -20,6 +20,7 @@ def call_model(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
     on_stream_chunk: Callable[[str], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Send conversation messages and tools to model and return the assembled choice message."""
     kwargs: dict[str, Any] = {
@@ -37,6 +38,9 @@ def call_model(
     tool_calls_dict = {}
 
     for chunk in response_stream:
+        if is_cancelled and is_cancelled():
+            break
+            
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta

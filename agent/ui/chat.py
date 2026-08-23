@@ -55,12 +55,11 @@ class ChatPanel(ScrollableContainer):
         color = "red" if is_error else "green"
         
         message = f"[{color}]{icon} {action_text}[/{color}] {target}"
+        self.mount(Static(message, classes="tool-msg"))
         
-        if is_error:
-             message += f"\n[dim red]{result[:200]}[/dim red]"
-             
-        widget = Static(message, classes="tool-msg")
-        self.mount(widget)
+        if result and str(result).strip() not in ("", "Success"):
+            self.mount(Markdown(f"```\n{result.strip()}\n```", classes="tool-result-md"))
+            
         self.scroll_end(animate=False)
 
     def append_system_notice(self, text: str) -> None:

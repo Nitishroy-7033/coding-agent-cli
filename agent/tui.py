@@ -24,6 +24,11 @@ from agent.loop import run_turn
 from agent.ui.constants import CSS, ASCII_LOGO
 from agent.ui.sidebar import SidebarPanel
 from agent.ui.chat import ChatPanel
+from agent.ui.modals import ApprovalScreen
+from agent.tools.rag_ops import build_index
+import threading
+
+HISTORY_FILE = Path(".agent_history.json")
 
 
 class OpenCodeAgentApp(App):
@@ -34,6 +39,9 @@ class OpenCodeAgentApp(App):
     BINDINGS = [
         Binding("tab", "cycle_mode", "Cycle Mode (Build/Plan/Ask)", show=True),
         Binding("ctrl+m", "change_model_prompt", "Change Model", show=True),
+        Binding("ctrl+l", "clear_chat", "Clear Chat", show=True),
+        Binding("escape", "interrupt", "Interrupt", show=False),
+        Binding("ctrl+y", "copy_last", "Copy Last", show=False),
         Binding("ctrl+c", "quit_app", "Quit", show=True),
     ]
 
@@ -43,9 +51,18 @@ class OpenCodeAgentApp(App):
         self.client = get_client(self.config)
         self.cwd = Path.cwd()
         self.agent_mode: AgentMode = AgentMode.BUILD
-        self.messages: list[dict[str, Any]] = [
-            {"role": "system", "content": get_system_prompt(self.agent_mode, self.cwd)}
-        ]
+        self.messages: list[dict[str, Any]] = []
+        if HISTORY_FILE.exists():
+            try:
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    self.messages = json.load(f)
+            except Exception:
+                pass
+                
+        if not self.messages:
+            self.messages = [
+                {"role": "system", "content": get_system_prompt(self.agent_mode, self.cwd)}
+            ]
         self.session_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.119Z")
         self.active_files: set[str] = set()
         self.tool_history: list[str] = []
@@ -55,8 +72,24 @@ class OpenCodeAgentApp(App):
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
     def on_mount(self):
+        chat = self.query_one(ChatPanel)
+        for msg in self.messages[1:]:
+            role = msg.get("role")
+            if role == "user":
+                chat.append_user_message(msg.get("content", ""))
+            elif role == "assistant" and msg.get("content"):
+                chat.append_agent_message(msg.get("content", ""), self.agent_mode, self.config.model)
+            elif role == "tool":
+                chat.append_tool_message("tool_result", {"id": msg.get("tool_call_id", "")}, msg.get("content", ""))
+                
         self.query_one(SidebarPanel).update_token_tracker(self.messages, self.tokenizer)
         self.run_worker(self.query_one(SidebarPanel).update_git_status)
+
+        if (self.cwd / ".agent_chroma").exists():
+            def run_indexer():
+                result = build_index()
+                self.call_from_thread(self.query_one(ChatPanel).append_system_notice, f"[dim]{result}[/dim]")
+            self.run_worker(run_indexer, thread=True)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="app-container"):
@@ -183,7 +216,7 @@ class OpenCodeAgentApp(App):
         
         # Command completion
         if not is_trailing_space and len(words) == 1 and value.startswith("/"):
-            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo"]
+            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index"]
             matches = [cmd for cmd in commands if cmd.startswith(value.lower())]
             if matches:
                 popup.clear_options()
@@ -203,6 +236,20 @@ class OpenCodeAgentApp(App):
                     popup.clear_options()
                     for match in modes: # Add all modes but highlight matches, actually just add matches
                         pass
+                    for match in matches:
+                        popup.add_option(Option(match, id=match))
+                    popup.display = True
+                    popup.action_first()
+                    return
+
+        # Model argument completion
+        if len(words) >= 1 and words[0].lower() == "/model":
+            if (len(words) == 1 and is_trailing_space) or (len(words) == 2 and not is_trailing_space):
+                models = ["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet", "gemini-1.5-pro", "gemini-1.5-flash"]
+                prefix = current_word.lower()
+                matches = [m for m in models if m.startswith(prefix)]
+                if matches:
+                    popup.clear_options()
                     for match in matches:
                         popup.add_option(Option(match, id=match))
                     popup.display = True
@@ -254,6 +301,8 @@ class OpenCodeAgentApp(App):
                         input_box.value = f"{selected} "
                     elif words[0].lower() == "/mode" and ((len(words) == 1 and is_trailing_space) or len(words) == 2):
                         input_box.value = f"/mode {selected} "
+                    elif words[0].lower() == "/model" and ((len(words) == 1 and is_trailing_space) or len(words) == 2):
+                        input_box.value = f"/model {selected} "
                     else:
                         if not is_trailing_space:
                             words[-1] = f"@{selected}"
@@ -314,6 +363,41 @@ class OpenCodeAgentApp(App):
 
     def action_quit_app(self):
         self.exit()
+
+    def action_interrupt(self):
+        if hasattr(self, "agent_worker") and self.agent_worker:
+            self.agent_worker.cancel()
+            self.query_one(ChatPanel).append_system_notice("Agent execution interrupted.")
+            self.hide_loading()
+
+    def action_copy_last(self):
+        for msg in reversed(self.messages):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                self.copy_to_clipboard(msg["content"])
+                self.query_one(ChatPanel).append_system_notice("Copied last message to clipboard!")
+                break
+
+    def _save_history(self):
+        try:
+            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.messages, f, indent=2)
+        except Exception:
+            pass
+
+    def action_clear_chat(self):
+        self.messages = [
+            {"role": "system", "content": get_system_prompt(self.agent_mode, self.cwd)}
+        ]
+        if HISTORY_FILE.exists():
+            try:
+                HISTORY_FILE.unlink()
+            except Exception:
+                pass
+        chat = self.query_one(ChatPanel)
+        for child in chat.children:
+            child.remove()
+        self.query_one(SidebarPanel).update_token_tracker(self.messages, self.tokenizer)
+        chat.append_system_notice("Chat history cleared.")
 
     def append_user_message(self, text: str):
         self.screen.add_class("chat-mode")
@@ -465,6 +549,16 @@ class OpenCodeAgentApp(App):
                 self.query_one(ChatPanel).append_system_notice("Usage: /connect <base_url> [api_key]")
             return
 
+        if user_text.lower().strip() == "/index":
+            self.query_one(ChatPanel).append_system_notice("Building semantic index in background... this may take a moment.")
+            def run_indexer():
+                self.call_from_thread(self.show_loading)
+                result = build_index()
+                self.call_from_thread(self.hide_loading)
+                self.call_from_thread(self.query_one(ChatPanel).append_system_notice, result)
+            self.run_worker(run_indexer, thread=True)
+            return
+
         # Normal message processing
         
         # Parse context mentions
@@ -490,12 +584,37 @@ class OpenCodeAgentApp(App):
             self.messages.append({"role": "user", "content": user_text})
 
         # Run model turn in worker thread
-        self.run_worker(self._execute_agent_turn, thread=True)
+        self.agent_worker = self.run_worker(self._execute_agent_turn, thread=True)
 
     def _execute_agent_turn(self):
         # Select tools based on mode
         active_tools = get_tools_for_mode(self.agent_mode)
         self.call_from_thread(self.show_loading)
+
+        def is_cancelled():
+            return hasattr(self, "agent_worker") and self.agent_worker.is_cancelled
+
+        def on_tool_approval(fn_name: str, args: dict) -> bool:
+            event = threading.Event()
+            approved = False
+
+            def prompt_user():
+                def callback(result):
+                    nonlocal approved
+                    approved = result
+                    event.set()
+                self.push_screen(ApprovalScreen(fn_name, args), callback)
+
+            self.call_from_thread(self.hide_loading)
+            self.call_from_thread(prompt_user)
+
+            while not event.is_set():
+                if is_cancelled():
+                    return False
+                event.wait(0.1)
+
+            self.call_from_thread(self.show_loading)
+            return approved
 
         def on_tool_start(fn_name: str, args: dict):
             pass  # Handled in loop
@@ -504,6 +623,7 @@ class OpenCodeAgentApp(App):
             self.call_from_thread(self.hide_loading)
             self.call_from_thread(self.query_one(ChatPanel).append_tool_message, fn_name, args, result)
             self.call_from_thread(self.show_loading)
+            self.call_from_thread(self._save_history)
             
             if fn_name in ("read_file", "write_file", "edit_file"):
                 target = args.get("path") or args.get("TargetFile") or args.get("AbsolutePath")
@@ -555,7 +675,7 @@ class OpenCodeAgentApp(App):
             self.call_from_thread(update_stream, accumulated_text)
             self.call_from_thread(self._update_token_tracker)
 
-        run_turn(
+        self.messages = run_turn(
             messages=self.messages,
             tools=active_tools,
             tool_registry=TOOL_REGISTRY,
@@ -564,6 +684,8 @@ class OpenCodeAgentApp(App):
             on_tool_start=on_tool_start,
             on_tool_end=on_tool_end,
             on_stream_chunk=on_stream_chunk,
+            is_cancelled=is_cancelled,
+            on_tool_approval=on_tool_approval
         )
 
         last_msg = self.messages[-1]
@@ -572,6 +694,7 @@ class OpenCodeAgentApp(App):
             if not accumulated_text:
                 self.call_from_thread(self.query_one(ChatPanel).append_agent_message, last_msg["content"], self.agent_mode, self.config.model)
         self.call_from_thread(self._update_token_tracker)
+        self.call_from_thread(self._save_history)
 
 
 def run_tui():
