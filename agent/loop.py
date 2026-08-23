@@ -2,6 +2,11 @@ import json
 from typing import Any, Callable, Optional
 from openai import OpenAI
 from agent.client import call_model
+from agent.context import (
+    current_on_tool_start, current_on_tool_end,
+    current_on_stream_chunk, current_on_tool_approval,
+    current_is_cancelled
+)
 
 
 def run_turn(
@@ -17,6 +22,14 @@ def run_turn(
     on_tool_approval: Optional[Callable[[str, dict], bool]] = None,
 ) -> list[dict[str, Any]]:
     """Execute one turn of conversation loop until plain text reply from model."""
+    
+    # Set context variables for this run
+    current_on_tool_start.set(on_tool_start)
+    current_on_tool_end.set(on_tool_end)
+    current_on_stream_chunk.set(on_stream_chunk)
+    current_on_tool_approval.set(on_tool_approval)
+    current_is_cancelled.set(is_cancelled)
+    
     while True:
         if is_cancelled and is_cancelled():
             break

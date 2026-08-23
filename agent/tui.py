@@ -148,18 +148,7 @@ class OpenCodeAgentApp(App):
         except Exception:
             pass
 
-    def _update_active_files(self):
-        try:
-            tracker = self.query_one("#sb-active-files", Static)
-            if not self.active_files:
-                tracker.update("[dim]No files in context[/dim]")
-            else:
-                files_str = "\n".join(f"[dim]• {Path(f).name}[/dim]" for f in sorted(list(self.active_files))[-5:])
-                if len(self.active_files) > 5:
-                    files_str += "\n[dim]...[/dim]"
-                tracker.update(files_str)
-        except Exception:
-            pass
+    # removed _update_active_files
 
     def _update_tool_history(self):
         try:
@@ -488,7 +477,7 @@ class OpenCodeAgentApp(App):
             self.screen.remove_class("chat-mode")
             self.query_one(SidebarPanel).update_token_tracker(self.messages, self.tokenizer)
             self.active_files.clear()
-            self.query_one(SidebarPanel).update_active_files(self.active_files)
+            # removed active_files update
             self.tool_history.clear()
             self.query_one(SidebarPanel).update_tool_history(self.tool_history)
             return

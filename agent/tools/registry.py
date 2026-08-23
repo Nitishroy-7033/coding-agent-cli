@@ -8,6 +8,7 @@ from agent.tools.file_ops import (
 )
 from agent.tools.shell_ops import run_bash, RUN_BASH_SCHEMA
 from agent.tools.rag_ops import semantic_search, SEMANTIC_SEARCH_SCHEMA
+from agent.tools.delegation_ops import delegate_task, DELEGATE_TASK_SCHEMA
 from agent.tools.lsp_ops import (
     workspace_symbol_search, WORKSPACE_SYMBOL_SEARCH_SCHEMA,
     get_document_symbols, GET_DOCUMENT_SYMBOLS_SCHEMA,
@@ -38,6 +39,9 @@ register_tool("run_bash", run_bash, RUN_BASH_SCHEMA)
 # Register RAG tools
 register_tool("semantic_search", semantic_search, SEMANTIC_SEARCH_SCHEMA)
 
+# Register Delegation tools
+register_tool("delegate_task", delegate_task, DELEGATE_TASK_SCHEMA)
+
 # Register LSP tools
 register_tool("workspace_symbol_search", workspace_symbol_search, WORKSPACE_SYMBOL_SEARCH_SCHEMA)
 register_tool("get_document_symbols", get_document_symbols, GET_DOCUMENT_SYMBOLS_SCHEMA)
@@ -50,7 +54,7 @@ def get_tools_for_mode(mode: AgentMode) -> list[dict[str, Any]]:
         allowed = read_only
     elif mode == AgentMode.PLAN:
         # Plan mode can read files and write new plan artifacts, but cannot edit code or run bash
-        allowed = read_only | {"write_file"}
+        allowed = read_only | {"write_file", "delegate_task"}
     else:
         # Build mode gets everything
         return TOOLS
