@@ -18,11 +18,8 @@ class SidebarPanel(Vertical):
         yield Static("Context", classes="sb-title")
         yield Static("[dim]0 tokens\n0% used\n$0.00 spent[/dim]", id="sb-token-tracker", classes="sb-content")
         
-        yield Static("Active Files", classes="sb-title")
-        yield Static("[dim]No files in context[/dim]", id="sb-active-files", classes="sb-content")
-        
-        yield Static("Git Status", classes="sb-title")
-        yield Static("[dim]Loading...[/dim]", id="sb-git-status", classes="sb-content")
+        yield Static("Knowledge Base", classes="sb-title")
+        yield Static("[dim]Not Indexed[/dim]", id="sb-knowledge-base", classes="sb-content")
         
         yield Static("Recent Tools", classes="sb-title")
         yield Static("[dim]No tools used yet[/dim]", id="sb-tool-history", classes="sb-content")
@@ -42,19 +39,6 @@ class SidebarPanel(Vertical):
         except Exception:
             pass
 
-    def update_active_files(self, active_files: Set[str]) -> None:
-        try:
-            tracker = self.query_one("#sb-active-files", Static)
-            if not active_files:
-                tracker.update("[dim]No files in context[/dim]")
-            else:
-                files_str = "\n".join(f"[dim]• {Path(f).name}[/dim]" for f in sorted(list(active_files))[-5:])
-                if len(active_files) > 5:
-                    files_str += "\n[dim]...[/dim]"
-                tracker.update(files_str)
-        except Exception:
-            pass
-
     def update_tool_history(self, tool_history: List[str]) -> None:
         try:
             tracker = self.query_one("#sb-tool-history", Static)
@@ -66,31 +50,9 @@ class SidebarPanel(Vertical):
         except Exception:
             pass
 
-    async def update_git_status(self) -> None:
+    def update_knowledge_base(self, text: str) -> None:
         try:
-            tracker = self.query_one("#sb-git-status", Static)
-            result = subprocess.run(
-                ["git", "status", "-sb"], 
-                cwd=self.cwd, capture_output=True, text=True, check=False
-            )
-            if result.returncode != 0:
-                tracker.update("[dim]Not a git repository[/dim]")
-                return
-                
-            lines = result.stdout.strip().split("\n")
-            if not lines:
-                return
-            branch_info = lines[0]
-            modified_count = len(lines) - 1
-            
-            status_text = f"[bold cyan]{branch_info.replace('## ', '')}[/bold cyan]\n"
-            if modified_count > 0:
-                status_text += f"[yellow]{modified_count} uncommitted changes[/yellow]"
-            else:
-                status_text += "[dim]Clean working tree[/dim]"
-                
-            tracker.update(status_text)
-        except FileNotFoundError:
-            tracker.update("[dim]Git not installed[/dim]")
+            tracker = self.query_one("#sb-knowledge-base", Static)
+            tracker.update(text)
         except Exception:
-            tracker.update("[dim]Git error[/dim]")
+            pass

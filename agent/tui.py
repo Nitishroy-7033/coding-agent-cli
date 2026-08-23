@@ -83,12 +83,11 @@ class OpenCodeAgentApp(App):
                 chat.append_tool_message("tool_result", {"id": msg.get("tool_call_id", "")}, msg.get("content", ""))
                 
         self.query_one(SidebarPanel).update_token_tracker(self.messages, self.tokenizer)
-        self.run_worker(self.query_one(SidebarPanel).update_git_status)
 
         if (self.cwd / ".agent_chroma").exists():
             def run_indexer():
                 result = build_index()
-                self.call_from_thread(self.query_one(ChatPanel).append_system_notice, f"[dim]{result}[/dim]")
+                self.call_from_thread(self.query_one(SidebarPanel).update_knowledge_base, f"[bold cyan]Active[/bold cyan]\n[dim]{result}[/dim]")
             self.run_worker(run_indexer, thread=True)
 
     def compose(self) -> ComposeResult:
@@ -216,7 +215,7 @@ class OpenCodeAgentApp(App):
         
         # Command completion
         if not is_trailing_space and len(words) == 1 and value.startswith("/"):
-            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index"]
+            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index", "/auto"]
             matches = [cmd for cmd in commands if cmd.startswith(value.lower())]
             if matches:
                 popup.clear_options()
@@ -502,7 +501,8 @@ class OpenCodeAgentApp(App):
                 "  [cyan]/model <name>[/cyan] - Switch the active model\n"
                 "  [cyan]/mode <target>[/cyan] - Change agent mode (BUILD, PLAN, ASK)\n"
                 "  [cyan]/connect <url> [key][/cyan] - Connect to a custom OpenAI endpoint\n"
-                "  [cyan]/undo[/cyan]   - Undo the last agent action"
+                "  [cyan]/undo[/cyan]   - Undo the last agent action\n"
+                "  [cyan]/auto <task>[/cyan] - Run the agent autonomously in a background loop"
             )
             self.query_one(ChatPanel).append_system_notice(help_text)
             return
@@ -556,7 +556,24 @@ class OpenCodeAgentApp(App):
                 result = build_index()
                 self.call_from_thread(self.hide_loading)
                 self.call_from_thread(self.query_one(ChatPanel).append_system_notice, result)
+                self.call_from_thread(self.query_one(SidebarPanel).update_knowledge_base, f"[bold cyan]Active[/bold cyan]\n[dim]{result}[/dim]")
             self.run_worker(run_indexer, thread=True)
+            return
+            
+        if user_text.lower().startswith("/auto"):
+            parts = user_text.split(maxsplit=1)
+            if len(parts) > 1:
+                task_description = parts[1]
+                self.query_one(ChatPanel).append_system_notice("Agent is thinking autonomously in the background. Please wait...")
+                def run_auto():
+                    self.call_from_thread(self.show_loading)
+                    from agent.autonomous import run_autonomous_loop
+                    result = run_autonomous_loop(task_description, self.cwd, self.client, self.config.model)
+                    self.call_from_thread(self.hide_loading)
+                    self.call_from_thread(self.query_one(ChatPanel).append_agent_message, result)
+                self.run_worker(run_auto, thread=True)
+            else:
+                self.query_one(ChatPanel).append_system_notice("Usage: /auto <task description>")
             return
 
         # Normal message processing

@@ -8,6 +8,11 @@ from agent.tools.file_ops import (
 )
 from agent.tools.shell_ops import run_bash, RUN_BASH_SCHEMA
 from agent.tools.rag_ops import semantic_search, SEMANTIC_SEARCH_SCHEMA
+from agent.tools.lsp_ops import (
+    workspace_symbol_search, WORKSPACE_SYMBOL_SEARCH_SCHEMA,
+    get_document_symbols, GET_DOCUMENT_SYMBOLS_SCHEMA,
+    find_references, FIND_REFERENCES_SCHEMA
+)
 from agent.modes import AgentMode
 
 TOOL_REGISTRY: dict[str, Callable[..., Any]] = {}
@@ -33,9 +38,14 @@ register_tool("run_bash", run_bash, RUN_BASH_SCHEMA)
 # Register RAG tools
 register_tool("semantic_search", semantic_search, SEMANTIC_SEARCH_SCHEMA)
 
+# Register LSP tools
+register_tool("workspace_symbol_search", workspace_symbol_search, WORKSPACE_SYMBOL_SEARCH_SCHEMA)
+register_tool("get_document_symbols", get_document_symbols, GET_DOCUMENT_SYMBOLS_SCHEMA)
+register_tool("find_references", find_references, FIND_REFERENCES_SCHEMA)
+
 def get_tools_for_mode(mode: AgentMode) -> list[dict[str, Any]]:
     """Return the appropriate subset of tools based on the agent's current mode."""
-    read_only = {"read_file", "list_directory", "search_files", "semantic_search"}
+    read_only = {"read_file", "list_directory", "search_files", "semantic_search", "workspace_symbol_search", "get_document_symbols", "find_references"}
     if mode == AgentMode.ASK:
         allowed = read_only
     elif mode == AgentMode.PLAN:

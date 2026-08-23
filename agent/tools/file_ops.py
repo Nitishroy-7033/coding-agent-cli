@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import difflib
+from agent.tools.lsp_ops import notify_lsp_did_save
 from pathlib import Path
 import pathspec
 
@@ -164,8 +165,9 @@ def write_file(path: str, content: str) -> str:
             tofile=f"b/{path}",
             lineterm=""
         ))
-        
         target_path.write_text(content, encoding="utf-8")
+        
+        notify_lsp_did_save(path)
         
         if diff:
             return f"File written successfully. Diff:\n```diff\n{diff}\n```"
@@ -201,6 +203,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
         ))
         
         target_path.write_text(new_content, encoding="utf-8")
+        notify_lsp_did_save(path)
         return f"Edit applied. Diff:\n```diff\n{diff}\n```"
     except Exception as e:
         return f"Error editing file '{path}': {e}"
