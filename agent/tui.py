@@ -24,15 +24,15 @@ from agent.loop import run_turn
 from agent.ui.constants import CSS, ASCII_LOGO
 from agent.ui.sidebar import SidebarPanel
 from agent.ui.chat import ChatPanel
-from agent.ui.modals import ApprovalScreen
+from agent.ui.modals import ApprovalScreen, SessionSelectScreen, ConnectionScreen
 from agent.tools.rag_ops import build_index
 import threading
 
-HISTORY_FILE = Path(".agent_history.json")
+SESSIONS_DIR = Path(".devcoder_sessions")
 
 
-class OpenCodeAgentApp(App):
-    """OpenCode-style TUI Application for CLI Coding Agent."""
+class DevCoderAgentApp(App):
+    """DevCoder-style TUI Application for CLI Coding Agent."""
 
     CSS = CSS
 
@@ -45,19 +45,25 @@ class OpenCodeAgentApp(App):
         Binding("ctrl+c", "quit_app", "Quit", show=True),
     ]
 
-    def __init__(self):
+    def __init__(self, resume: bool = False):
         super().__init__()
         self.config: Config = load_config()
         self.client = get_client(self.config)
         self.cwd = Path.cwd()
         self.agent_mode: AgentMode = AgentMode.BUILD
         self.messages: list[dict[str, Any]] = []
-        if HISTORY_FILE.exists():
-            try:
-                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                    self.messages = json.load(f)
-            except Exception:
-                pass
+        self.session_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        SESSIONS_DIR.mkdir(exist_ok=True)
+        
+        if resume:
+            files = sorted(SESSIONS_DIR.glob("*.json"), reverse=True)
+            if files:
+                try:
+                    with open(files[0], "r", encoding="utf-8") as f:
+                        self.messages = json.load(f)
+                    self.session_id = files[0].stem
+                except Exception:
+                    pass
                 
         if not self.messages:
             self.messages = [
@@ -101,18 +107,21 @@ class OpenCodeAgentApp(App):
 
                 with Container(id="input-card"):
                     yield Input(
-                        placeholder='Ask anything... "Fix a TODO in the codebase"',
+                        placeholder='Message DevCoder… (/ for commands, @ to mention files)',
                         id="prompt-input",
                     )
                     yield Static(self._get_status_markup(), id="status-line")
-                    
+
                     with Horizontal(id="input-footer"):
                         yield Static(self._get_chat_footer_markup(), id="input-footer-left")
                         pb = ProgressBar(show_eta=False, show_percentage=False, id="loading-bar")
                         pb.display = False
                         pb.styles.width = 15
                         yield pb
-                        yield Static("[dim]esc[/dim] interrupt", id="input-footer-right")
+                        yield Static(
+                            "[dim #45475a][[/dim #45475a][#585b70]Esc[/#585b70][dim #45475a]][/dim #45475a][dim #6c7086] stop[/dim #6c7086]",
+                            id="input-footer-right",
+                        )
                 
 
             
@@ -120,31 +129,55 @@ class OpenCodeAgentApp(App):
 
     def _get_status_markup(self) -> str:
         mode_colors = {
-            AgentMode.BUILD: "bold blue",
-            AgentMode.PLAN: "bold magenta",
-            AgentMode.ASK: "bold green",
+            AgentMode.BUILD: "#89b4fa",
+            AgentMode.PLAN:  "#cba6f7",
+            AgentMode.ASK:   "#a6e3a1",
         }
-        color = mode_colors.get(self.agent_mode, "bold blue")
+        mode_icons = {
+            AgentMode.BUILD: "⬡",
+            AgentMode.PLAN:  "◈",
+            AgentMode.ASK:   "◎",
+        }
+        color = mode_colors.get(self.agent_mode, "#89b4fa")
+        icon  = mode_icons.get(self.agent_mode, "◉")
+        short_model = self.config.model.split("/")[-1] if "/" in self.config.model else self.config.model
         return (
-            f"[{color}]{self.agent_mode.value}[/{color}]  •  "
-            f"[dim]{self.config.model}[/dim]"
+            f"[bold {color}]{icon}  {self.agent_mode.value}[/bold {color}]"
+            f"  [dim #585b70]│[/dim #585b70]  "
+            f"[dim #6c7086]{short_model}[/dim #6c7086]"
         )
 
     def _update_token_tracker(self):
         try:
             total_tokens = sum(len(self.tokenizer.encode(str(msg))) for msg in self.messages)
-            max_tokens = 128000
-            pct = (total_tokens / max_tokens) * 100
-            cost = (total_tokens / 1000000) * 5.0
-            
-            style = "dim"
+            max_tokens   = 128_000
+            pct          = (total_tokens / max_tokens) * 100
+            cost         = (total_tokens / 1_000_000) * 5.0
+
             if pct >= 95:
-                style = "bold red"
+                style = "bold #f38ba8"
             elif pct >= 80:
-                style = "bold yellow"
-            
+                style = "bold #f9e2af"
+            else:
+                style = "dim #6c7086"
+
             tracker = self.query_one("#sb-token-tracker", Static)
-            tracker.update(f"[{style}]{total_tokens:,} tokens\n{pct:.2f}% used\n${cost:.4f} spent[/{style}]")
+            tracker.update(
+                f"[{style}]{total_tokens:,}[/{style}]"
+                f"[dim #6c7086] tokens \u00b7 {pct:.1f}% \u00b7 ${cost:.4f}[/dim #6c7086]"
+            )
+
+            # Mini ASCII progress bar
+            filled   = int((pct / 100) * 20)
+            bar_str  = "█" * filled + "░" * (20 - filled)
+            bar_cls  = "token-bar-crit" if pct >= 95 else ("token-bar-warn" if pct >= 80 else "token-bar")
+            try:
+                bar_widget = self.query_one("#sb-token-bar", Static)
+                bar_widget.remove_class("token-bar", "token-bar-warn", "token-bar-crit")
+                bar_widget.add_class(bar_cls)
+                bar_widget.update(f"{bar_str} {pct:.0f}%")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -204,7 +237,7 @@ class OpenCodeAgentApp(App):
         
         # Command completion
         if not is_trailing_space and len(words) == 1 and value.startswith("/"):
-            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index", "/auto"]
+            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index", "/auto", "/resume", "/sessions"]
             matches = [cmd for cmd in commands if cmd.startswith(value.lower())]
             if matches:
                 popup.clear_options()
@@ -307,12 +340,28 @@ class OpenCodeAgentApp(App):
 
     def _get_chat_footer_markup(self) -> str:
         mode_colors = {
-            AgentMode.BUILD: "blue",
-            AgentMode.PLAN: "magenta",
-            AgentMode.ASK: "green",
+            AgentMode.BUILD: "#89b4fa",
+            AgentMode.PLAN:  "#cba6f7",
+            AgentMode.ASK:   "#a6e3a1",
         }
-        color = mode_colors.get(self.agent_mode, "blue")
-        return f"[bold {color}]{self.agent_mode.value}[/bold {color}] • [white]{self.config.model}[/white] [dim]OpenCode Zen[/dim]"
+        mode_icons = {
+            AgentMode.BUILD: "⬡",
+            AgentMode.PLAN:  "◈",
+            AgentMode.ASK:   "◎",
+        }
+        color = mode_colors.get(self.agent_mode, "#89b4fa")
+        icon  = mode_icons.get(self.agent_mode, "◉")
+        short_model = self.config.model.split("/")[-1] if "/" in self.config.model else self.config.model
+        keybinds = (
+            "[dim #45475a][[/dim #45475a][#585b70]Tab[/#585b70][dim #45475a]][/dim #45475a][dim #6c7086] mode[/dim #6c7086]  "
+            "[dim #45475a][[/dim #45475a][#585b70]Ctrl+L[/#585b70][dim #45475a]][/dim #45475a][dim #6c7086] clear[/dim #6c7086]  "
+            "[dim #45475a][[/dim #45475a][#585b70]Ctrl+C[/#585b70][dim #45475a]][/dim #45475a][dim #6c7086] quit[/dim #6c7086]"
+        )
+        return (
+            f"[bold {color}]{icon}  {self.agent_mode.value}[/bold {color}]"
+            f"  [dim #45475a]│[/dim #45475a]  [dim #6c7086]{short_model}[/dim #6c7086]"
+            f"  [dim #313244]│[/dim #313244]  {keybinds}"
+        )
 
     def update_status_bar(self):
         try:
@@ -367,10 +416,34 @@ class OpenCodeAgentApp(App):
 
     def _save_history(self):
         try:
-            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            SESSIONS_DIR.mkdir(exist_ok=True)
+            history_file = SESSIONS_DIR / f"{self.session_id}.json"
+            with open(history_file, "w", encoding="utf-8") as f:
                 json.dump(self.messages, f, indent=2)
         except Exception:
             pass
+            
+    async def _load_session_ui(self, session_path: Path):
+        try:
+            with open(session_path, "r", encoding="utf-8") as f:
+                self.messages = json.load(f)
+            self.session_id = session_path.stem
+            
+            chat = self.query_one("#chat-container", ScrollableContainer)
+            await chat.remove_children()
+            for msg in self.messages[1:]:
+                role = msg.get("role")
+                if role == "user":
+                    chat.append_user_message(msg.get("content", ""))
+                elif role == "assistant" and msg.get("content"):
+                    chat.append_agent_message(msg.get("content", ""), self.agent_mode, self.config.model)
+                elif role == "tool":
+                    chat.append_tool_message("tool_result", {"id": msg.get("tool_call_id", "")}, msg.get("content", ""))
+            
+            self.query_one(SidebarPanel).update_token_tracker(self.messages, self.tokenizer)
+            self.query_one(ChatPanel).append_system_notice(f"Session {self.session_id} loaded.")
+        except Exception as e:
+            self.query_one(ChatPanel).append_system_notice(f"Failed to resume session: {e}")
 
     def action_clear_chat(self):
         self.messages = [
@@ -486,10 +559,12 @@ class OpenCodeAgentApp(App):
             help_text = (
                 "[bold]Available Commands:[/bold]\n"
                 "  [cyan]/clear[/cyan]  - Reset conversation history\n"
-                "  [cyan]/exit[/cyan]   - Quit OpenCode\n"
+                "  [cyan]/sessions[/cyan] - View and load past sessions\n"
+                "  [cyan]/resume[/cyan] - Reload the most recent conversation\n"
+                "  [cyan]/exit[/cyan]   - Quit DevCoder\n"
                 "  [cyan]/model <name>[/cyan] - Switch the active model\n"
                 "  [cyan]/mode <target>[/cyan] - Change agent mode (BUILD, PLAN, ASK)\n"
-                "  [cyan]/connect <url> [key][/cyan] - Connect to a custom OpenAI endpoint\n"
+                "  [cyan]/connect[/cyan] - Configure API connection (URL/Key/Model)\n"
                 "  [cyan]/undo[/cyan]   - Undo the last agent action\n"
                 "  [cyan]/auto <task>[/cyan] - Run the agent autonomously in a background loop"
             )
@@ -498,6 +573,22 @@ class OpenCodeAgentApp(App):
             
         if user_text.lower() == "/undo":
             self.query_one(ChatPanel).append_system_notice("Undo functionality is coming in Week 7!")
+            return
+            
+        if user_text.lower() == "/sessions":
+            async def on_session_selected(session_path: Path | None):
+                if session_path:
+                    await self._load_session_ui(session_path)
+            
+            self.push_screen(SessionSelectScreen(SESSIONS_DIR), callback=on_session_selected)
+            return
+            
+        if user_text.lower() == "/resume":
+            files = sorted(SESSIONS_DIR.glob("*.json"), reverse=True)
+            if files:
+                await self._load_session_ui(files[0])
+            else:
+                self.query_one(ChatPanel).append_system_notice("No previous session found.")
             return
 
         if user_text.lower().startswith("/mode"):
@@ -525,17 +616,19 @@ class OpenCodeAgentApp(App):
                 self.query_one(ChatPanel).append_system_notice(f"Current model: [bold yellow]{self.config.model}[/bold yellow]. Usage: /model <name>")
             return
 
-        if user_text.lower().startswith("/connect"):
-            parts = user_text.split(maxsplit=2)
-            if len(parts) >= 2:
-                new_url = parts[1]
-                new_key = parts[2] if len(parts) >= 3 else ""
-                self.config = save_config(base_url=new_url, api_key=new_key)
-                self.client = get_client(self.config)
-                self.update_status_bar()
-                self.query_one(ChatPanel).append_system_notice(f"Connected to endpoint: [bold green]{new_url}[/bold green]")
-            else:
-                self.query_one(ChatPanel).append_system_notice("Usage: /connect <base_url> [api_key]")
+        if user_text.lower() == "/connect":
+            def on_connection_saved(new_settings: dict | None):
+                if new_settings:
+                    self.config = save_config(
+                        base_url=new_settings.get("base_url"),
+                        api_key=new_settings.get("api_key"),
+                        model=new_settings.get("model")
+                    )
+                    self.client = get_client(self.config)
+                    self.update_status_bar()
+                    self.query_one(ChatPanel).append_system_notice(f"Connection updated: {self.config.base_url}")
+            
+            self.push_screen(ConnectionScreen(self.config), callback=on_connection_saved)
             return
 
         if user_text.lower().strip() == "/index":
@@ -581,7 +674,6 @@ class OpenCodeAgentApp(App):
                     pass
         
         if attached_context:
-            self.query_one(SidebarPanel).update_active_files(self.active_files)
             self.query_one(ChatPanel).append_user_message(user_text)
             enriched_text = user_text + "\n\n" + "\n\n".join(attached_context)
             self.messages.append({"role": "user", "content": enriched_text})
@@ -635,7 +727,7 @@ class OpenCodeAgentApp(App):
                 target = args.get("path") or args.get("TargetFile") or args.get("AbsolutePath")
                 if target:
                     self.active_files.add(target)
-                    self.call_from_thread(self._update_active_files)
+                    # active_files update removed
                     if fn_name in ("write_file", "edit_file"):
                         self.run_worker(self.query_one(SidebarPanel).update_git_status)
                         
@@ -703,8 +795,8 @@ class OpenCodeAgentApp(App):
         self.call_from_thread(self._save_history)
 
 
-def run_tui():
-    app = OpenCodeAgentApp()
+def run_tui(resume: bool = False):
+    app = DevCoderAgentApp(resume=resume)
     app.run()
 
 

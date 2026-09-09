@@ -17,30 +17,37 @@ from agent.loop import run_turn
 from agent.tui import run_tui
 from agent.modes import get_system_prompt, AgentMode
 
-app = typer.Typer(name="agent", help="CLI Coding Agent (OpenCode Edition)", invoke_without_command=True)
+app = typer.Typer(name="dev-coder", help="CLI Coding Agent (DevCoder Edition)", invoke_without_command=True)
 console = Console()
 
 
 @app.callback(invoke_without_command=True)
-def default_entry(ctx: typer.Context):
-    """Default entrypoint: Launches OpenCode TUI interface if no sub-command passed."""
+def default_entry(
+    ctx: typer.Context,
+    resume: bool = typer.Option(False, "--resume", "-r", help="Resume the previous chat session.")
+):
+    """Default entrypoint: Launches DevCoder TUI interface if no sub-command passed."""
     if ctx.invoked_subcommand is None:
-        run_tui()
+        run_tui(resume=resume)
 
 
 @app.command()
-def tui(yolo: bool = typer.Option(False, "--yolo", help="Run without safety prompts. Risky!")):
-    """Launch OpenCode TUI interface."""
+def tui(
+    yolo: bool = typer.Option(False, "--yolo", help="Run without safety prompts. Risky!"),
+    resume: bool = typer.Option(False, "--resume", "-r", help="Resume the previous chat session.")
+):
+    """Launch DevCoder TUI interface."""
     from agent.config import save_config
     if yolo:
         save_config(yolo=True)
-    run_tui()
+    run_tui(resume=resume)
 
 
 @app.command()
 def chat(
-    cli_mode: bool = typer.Option(False, "--cli", help="Run classic terminal prompt mode instead of OpenCode TUI"),
+    cli_mode: bool = typer.Option(False, "--cli", help="Run classic terminal prompt mode instead of DevCoder TUI"),
     yolo: bool = typer.Option(False, "--yolo", help="Run without safety prompts. Risky!"),
+    resume: bool = typer.Option(False, "--resume", "-r", help="Resume the previous chat session.")
 ):
     """Start interactive chat REPL with the coding agent."""
     from agent.config import save_config
@@ -48,7 +55,7 @@ def chat(
         save_config(yolo=True)
         
     if not cli_mode:
-        run_tui()
+        run_tui(resume=resume)
         return
 
     config = load_config()

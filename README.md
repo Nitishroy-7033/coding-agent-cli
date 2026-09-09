@@ -1,24 +1,62 @@
-1. Semantic Codebase Search (RAG)
-Right now, the agent uses simple keyword searches (grep). We could integrate a lightweight local vector database (like ChromaDB). This allows the agent to perform Semantic Search — meaning it can ask "Where is the user authentication logic?" and find the right files even if the exact words "user authentication" aren't written anywhere in the code.
+# DevCoder
 
-2. Language Server Protocol (LSP) Tools
-Currently, the agent reads code as raw text. We could give it tools to talk to an LSP (like pyright for Python or tsserver for TS). This gives the agent true code understanding, allowing it to accurately use commands like find_references(), go_to_definition(), or list_classes(). It eliminates "guessing" file paths.
+DevCoder is a powerful, terminal-based AI coding assistant. It operates directly in your local workspace, capable of reading files, writing code, running bash commands, performing semantic searches (RAG), querying Language Servers (LSP) for deep code understanding, and even spinning up autonomous background sub-agents to solve complex tasks.
 
-3. Self-Correction / Reflection Loops
-We can implement an internal loop where the agent doesn't immediately respond to you. Instead, it:
+## Installation
 
-Writes the code
-Automatically writes a unit test
-Runs the test in the background
-Reads the error log if it fails
-Fixes the code and tries again It only messages you once the test passes, making it seem incredibly smart and capable.
-4. Web Access & Documentation Reading
-Your agent is currently blind to the internet. We can give it search_web and read_url tools. If you ask it to use a brand new library it has never seen, it can search the web, read the latest API documentation, and write correct code instead of hallucinating outdated syntax.
+The recommended way to install DevCoder globally is using `uv`:
 
-5. Multi-Agent Delegation (Sub-agents)
-For huge tasks, one prompt gets overwhelmed. We can upgrade the architecture so your main agent acts as a Manager. If you ask it to build a feature, it spins up a background "Researcher Agent" to map out the codebase, and a "Coder Agent" to write the files, while the Manager orchestrates them.
+```bash
+uv tool install dev-coder
+```
 
-6. Long-Term Memory (Brain)
-Instead of just saving the current chat history, we can give the agent tools to write_memory and read_memory. It can build up a profile on your project architecture, your coding style preferences, and past mistakes, which it injects into its context on every fresh startup.
+Or using `pipx`:
 
-Which of these directions excites you the most? We can pick one to architect and build next!
+```bash
+pipx install dev-coder
+```
+
+Or simply using `pip`:
+
+```bash
+pip install dev-coder
+```
+
+## Usage
+
+Navigate to any codebase in your terminal and run:
+
+```bash
+dev-coder
+```
+
+This will launch the DevCoder Terminal User Interface (TUI) where you can interact with the agent.
+
+## Commands inside the TUI
+- `/mode <BUILD|PLAN|ASK>` - Change the agent's behavior mode.
+- `/model <name>` - Switch the active LLM.
+- `/auto <task>` - Spin up a background sub-agent to autonomously write code and run tests until it succeeds.
+- `/index` - Build a local ChromaDB semantic index of your codebase.
+- `/clear` - Reset the conversation context.
+- `/exit` - Close DevCoder.
+
+## For Maintainers: Publishing Updates to PyPI
+
+When you've made changes and want to publish a new version to PyPI:
+
+1. Update the `version` number in `pyproject.toml`.
+2. Delete the old `dist/` folder:
+   ```bash
+   Remove-Item -Recurse -Force dist
+   ```
+3. Build the new package:
+   ```bash
+   python -m build
+   ```
+4. Upload to PyPI (make sure your `$env:TWINE_PASSWORD` is set, or it will prompt you):
+   ```bash
+   python -m twine upload dist/*
+   ```
+
+
+
