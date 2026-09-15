@@ -24,6 +24,22 @@ def register_tool(name: str, fn: Callable[..., Any], schema: dict[str, Any]) -> 
     TOOL_REGISTRY[name] = fn
     TOOLS.append(schema)
 
+DYNAMIC_TOOLS: set[str] = set()
+
+def register_dynamic_tool(name: str, fn: Callable[..., Any], schema: dict[str, Any]) -> None:
+    """Register a dynamic tool (like an MCP tool) and track it."""
+    register_tool(name, fn, schema)
+    DYNAMIC_TOOLS.add(name)
+
+def unregister_dynamic_tools() -> None:
+    """Remove all dynamically registered tools from the registry."""
+    global TOOLS, TOOL_REGISTRY, DYNAMIC_TOOLS
+    TOOLS = [t for t in TOOLS if t["function"]["name"] not in DYNAMIC_TOOLS]
+    for name in DYNAMIC_TOOLS:
+        if name in TOOL_REGISTRY:
+            del TOOL_REGISTRY[name]
+    DYNAMIC_TOOLS.clear()
+
 # Register Week 1 tools
 register_tool("read_file", read_file, READ_FILE_SCHEMA)
 
@@ -51,10 +67,10 @@ def get_tools_for_mode(mode: AgentMode) -> list[dict[str, Any]]:
     """Return the appropriate subset of tools based on the agent's current mode."""
     read_only = {"read_file", "list_directory", "search_files", "semantic_search", "workspace_symbol_search", "get_document_symbols", "find_references"}
     if mode == AgentMode.ASK:
-        allowed = read_only
+        allowed = read_only | DYNAMIC_TOOLS
     elif mode == AgentMode.PLAN:
         # Plan mode can read files and write new plan artifacts, but cannot edit code or run bash
-        allowed = read_only | {"write_file", "delegate_task"}
+        allowed = read_only | {"write_file", "delegate_task"} | DYNAMIC_TOOLS
     else:
         # Build mode gets everything
         return TOOLS

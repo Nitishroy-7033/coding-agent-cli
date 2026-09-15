@@ -37,6 +37,12 @@ class SidebarPanel(Vertical):
 
         yield Static(_DIVIDER, classes="sb-divider")
 
+        # MCP Servers
+        yield Static("[bold #b4befe]🔌  MCP Servers[/bold #b4befe]", classes="sb-title")
+        yield Static("[dim #6c7086]Loading MCPs...[/dim #6c7086]", id="sb-mcp-status", classes="sb-content")
+
+        yield Static(_DIVIDER, classes="sb-divider")
+
         # Knowledge base
         yield Static("[bold #b4befe]⬡  Knowledge Base[/bold #b4befe]", classes="sb-title")
         yield Static("[dim #6c7086]Not indexed[/dim #6c7086]", id="sb-knowledge-base", classes="sb-content")
@@ -103,6 +109,13 @@ class SidebarPanel(Vertical):
     def update_knowledge_base(self, text: str) -> None:
         try:
             tracker = self.query_one("#sb-knowledge-base", Static)
+            tracker.update(text)
+        except Exception:
+            pass
+
+    def update_mcp_status(self, text: str) -> None:
+        try:
+            tracker = self.query_one("#sb-mcp-status", Static)
             tracker.update(text)
         except Exception:
             pass

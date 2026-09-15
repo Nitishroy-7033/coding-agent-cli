@@ -62,6 +62,14 @@ def chat(
     client = get_client(config)
     cwd = Path.cwd()
 
+    from agent.mcp_manager import MCPManager
+    import agent.tools.registry as registry
+    mcp_manager = MCPManager(cwd)
+    with console.status("[bold cyan]Initializing MCP servers...[/bold cyan]", spinner="dots"):
+        mcp_manager.initialize_sync()
+        mcp_manager.inject_tools(registry)
+    stats = mcp_manager.get_stats()
+
     table = Table.grid(expand=True)
     table.add_column(justify="left")
     table.add_column(justify="right")
@@ -74,6 +82,11 @@ def chat(
         f"[dim]Endpoint:[/dim] [green]{config.base_url}[/green] | [dim]Model:[/dim] [magenta]{config.model}[/magenta]",
         f"[dim]Commands:[/dim] [cyan]/clear[/cyan], [cyan]/exit[/cyan]",
     )
+    if stats["servers"] > 0:
+        table.add_row(
+            f"[dim]MCP Servers:[/dim] [bold blue]{stats['servers']}[/bold blue]",
+            f"[dim]MCP Tools:[/dim] [bold green]{stats['tools']}[/bold green]"
+        )
 
     console.print(
         Panel(
@@ -220,6 +233,12 @@ def run(
     config = load_config()
     client = get_client(config)
     cwd = Path.cwd()
+    
+    from agent.mcp_manager import MCPManager
+    import agent.tools.registry as registry
+    mcp_manager = MCPManager(cwd)
+    mcp_manager.initialize_sync()
+    mcp_manager.inject_tools(registry)
     
     from agent.modes import get_system_prompt, AgentMode
     messages = [

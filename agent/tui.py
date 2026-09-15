@@ -24,8 +24,9 @@ from agent.loop import run_turn
 from agent.ui.constants import CSS, ASCII_LOGO
 from agent.ui.sidebar import SidebarPanel
 from agent.ui.chat import ChatPanel
-from agent.ui.modals import ApprovalScreen, SessionSelectScreen, ConnectionScreen
+from agent.ui.modals import ApprovalScreen, SessionSelectScreen, ConnectionScreen, MCPScreen
 from agent.tools.rag_ops import build_index
+from agent.mcp_manager import MCPManager
 import threading
 
 SESSIONS_DIR = Path(".devcoder_sessions")
@@ -72,6 +73,7 @@ class DevCoderAgentApp(App):
         self.session_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.119Z")
         self.active_files: set[str] = set()
         self.tool_history: list[str] = []
+        self.mcp_manager = MCPManager(self.cwd)
         try:
             self.tokenizer = tiktoken.encoding_for_model(self.config.model)
         except KeyError:
@@ -95,6 +97,19 @@ class DevCoderAgentApp(App):
                 result = build_index()
                 self.call_from_thread(self.query_one(SidebarPanel).update_knowledge_base, f"[bold cyan]Active[/bold cyan]\n[dim]{result}[/dim]")
             self.run_worker(run_indexer, thread=True)
+
+        def run_mcp_init():
+            self.mcp_manager.initialize_sync()
+            import agent.tools.registry as registry
+            self.mcp_manager.inject_tools(registry)
+            stats = self.mcp_manager.get_stats()
+            if stats["servers"] > 0:
+                msg = f"[bold #a6e3a1]{stats['servers']} active[/bold #a6e3a1]\n[dim #6c7086]{stats['tools']} tools available[/dim #6c7086]"
+            else:
+                msg = "[dim #6c7086]No servers configured[/dim #6c7086]"
+            self.call_from_thread(self.query_one(SidebarPanel).update_mcp_status, msg)
+            
+        self.run_worker(run_mcp_init, thread=True)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="app-container"):
@@ -237,7 +252,7 @@ class DevCoderAgentApp(App):
         
         # Command completion
         if not is_trailing_space and len(words) == 1 and value.startswith("/"):
-            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index", "/auto", "/resume", "/sessions"]
+            commands = ["/clear", "/exit", "/help", "/mode", "/model", "/connect", "/undo", "/index", "/auto", "/resume", "/sessions", "/mcp"]
             matches = [cmd for cmd in commands if cmd.startswith(value.lower())]
             if matches:
                 popup.clear_options()
@@ -562,6 +577,7 @@ class DevCoderAgentApp(App):
                 "  [cyan]/sessions[/cyan] - View and load past sessions\n"
                 "  [cyan]/resume[/cyan] - Reload the most recent conversation\n"
                 "  [cyan]/exit[/cyan]   - Quit DevCoder\n"
+                "  [cyan]/mcp[/cyan]     - View and manage MCP servers\n"
                 "  [cyan]/model <name>[/cyan] - Switch the active model\n"
                 "  [cyan]/mode <target>[/cyan] - Change agent mode (BUILD, PLAN, ASK)\n"
                 "  [cyan]/connect[/cyan] - Configure API connection (URL/Key/Model)\n"
@@ -583,6 +599,29 @@ class DevCoderAgentApp(App):
             self.push_screen(SessionSelectScreen(SESSIONS_DIR), callback=on_session_selected)
             return
             
+        if user_text.lower() == "/mcp":
+            def on_mcp_action(action: str | None):
+                if action == "reload":
+                    self.query_one(ChatPanel).append_system_notice("Reloading MCP connections...")
+                    self.query_one(SidebarPanel).update_mcp_status("[dim #6c7086]Reloading...[/dim #6c7086]")
+                    
+                    def run_mcp_reload():
+                        self.mcp_manager.reload_sync()
+                        import agent.tools.registry as registry
+                        self.mcp_manager.inject_tools(registry)
+                        stats = self.mcp_manager.get_stats()
+                        if stats["servers"] > 0:
+                            msg = f"[bold #a6e3a1]{stats['servers']} active[/bold #a6e3a1]\n[dim #6c7086]{stats['tools']} tools available[/dim #6c7086]"
+                        else:
+                            msg = "[dim #6c7086]No servers configured[/dim #6c7086]"
+                        self.call_from_thread(self.query_one(SidebarPanel).update_mcp_status, msg)
+                        self.call_from_thread(self.query_one(ChatPanel).append_system_notice, "MCP connections reloaded.")
+                        
+                    self.run_worker(run_mcp_reload, thread=True)
+            
+            self.push_screen(MCPScreen(self.mcp_manager), callback=on_mcp_action)
+            return
+
         if user_text.lower() == "/resume":
             files = sorted(SESSIONS_DIR.glob("*.json"), reverse=True)
             if files:
